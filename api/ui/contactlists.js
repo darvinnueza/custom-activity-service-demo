@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 const GENESYS_BASE_API = "https://api.cac1.pure.cloud";
 const GENESYS_LOGIN_URL = "https://login.cac1.pure.cloud";
 const GENESYS_DIVISION_ID = "c36e51ad-bec1-4117-9fd3-9c1d22147888";
