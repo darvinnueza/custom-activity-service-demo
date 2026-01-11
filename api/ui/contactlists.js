@@ -5,8 +5,8 @@ const GENESYS_LOGIN_URL = "https://login.cac1.pure.cloud";
 const GENESYS_DIVISION_ID = "c36e51ad-bec1-4117-9fd3-9c1d22147888";
 
 // ⚠️ SOLO DEMO
-const GENESYS_CLIENT_ID = "REEMPLAZA_LUEGO";
-const GENESYS_CLIENT_SECRET = "REEMPLAZA_LUEGO";
+const GENESYS_CLIENT_ID = "8510b821-97b8-4dab-a739-11260cfa2f1d";
+const GENESYS_CLIENT_SECRET = "u8q39fufnYZYjr0xlf9m4WTAH16alfbxzgv86Ri0Gq4";
 
 let cachedToken = null;
 let tokenExpiresAt = 0;
