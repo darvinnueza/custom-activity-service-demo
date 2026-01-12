@@ -1,49 +1,90 @@
-import { getToken } from "../genesys/token.js";
-
 const GENESYS_BASE_API = "https://api.cac1.pure.cloud";
+const GENESYS_LOGIN_URL = "https://login.cac1.pure.cloud";
+const GENESYS_DIVISION_ID = "c36e51ad-bec1-4117-9fd3-9c1d22147888";
 
-// Columnas fijas según tu JSON
-const DEFAULT_PAYLOAD = (name) => ({
-    name,
-    columnNames: ["request_id", "contact_key", "phone_number", "status"],
-    phoneColumns: [{ columnName: "phone_number", type: "cell" }]
-});
+// ⚠️ SOLO DEMO
+const GENESYS_CLIENT_ID = "8510b821-97b8-4dab-a739-11260cfa2f1d";
+const GENESYS_CLIENT_SECRET = "u8q39fufnYZYjr0xlf9m4WTAH16alfbxzgv86Ri0Gq4";
 
-export default async function handler(req, res) {
-    if (req.method !== "POST") {
-        return res.status(405).json({ error: "Method not allowed" });
+let cachedToken = null;
+let tokenExpiresAt = 0;
+
+async function getToken() {
+    if (cachedToken && Date.now() < tokenExpiresAt) {
+        return cachedToken;
     }
 
+    const res = await fetch(`${GENESYS_LOGIN_URL}/oauth/token`, {
+        method: "POST",
+        headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: GENESYS_CLIENT_ID,
+        client_secret: GENESYS_CLIENT_SECRET
+        })
+    });
+
+    if (!res.ok) {
+        throw new Error("Error obteniendo token Genesys");
+    }
+
+    const data = await res.json();
+    cachedToken = data.access_token;
+    tokenExpiresAt = Date.now() + data.expires_in * 1000 - 60000;
+
+    return cachedToken;
+    }
+
+    export default async function handler(req, res) {
     try {
-        const { name } = req.body || {};
-        if (!name || typeof name !== "string" || !name.trim()) {
-        return res.status(400).json({ error: "Falta 'name'" });
+        const { name, columnNames } = req.body;
+
+        if (!name) {
+        return res.status(400).json({ error: "name es obligatorio" });
         }
 
         const token = await getToken();
 
-        const r = await fetch(`${GENESYS_BASE_API}/api/v2/outbound/contactlists`, {
-        method: "POST",
-        headers: {
+        const payload = {
+        name,
+        columnNames: columnNames || [
+            "request_id",
+            "contact_key",
+            "phone_number",
+            "status"
+        ],
+        phoneColumns: [
+            {
+            columnName: "phone_number",
+            type: "cell"
+            }
+        ]
+        };
+
+        const response = await fetch(
+        `${GENESYS_BASE_API}/api/v2/outbound/contactlists`,
+        {
+            method: "POST",
+            headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json"
-        },
-        body: JSON.stringify(DEFAULT_PAYLOAD(name.trim()))
-        });
+            },
+            body: JSON.stringify(payload)
+        }
+        );
 
-        const text = await r.text();
-
-        if (!r.ok) {
-        return res.status(r.status).json({ error: text });
+        if (!response.ok) {
+        const t = await response.text();
+        throw new Error(t);
         }
 
-        const created = JSON.parse(text);
-        return res.status(200).json({
-        id: created.id,
-        name: created.name
-        });
-    } catch (e) {
-        console.error("ERROR create contactlist:", e);
-        return res.status(500).json({ error: e.message });
+        const data = await response.json();
+        res.status(200).json(data);
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
     }
 }
