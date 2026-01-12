@@ -1,6 +1,5 @@
 const GENESYS_BASE_API = "https://api.cac1.pure.cloud";
 const GENESYS_LOGIN_URL = "https://login.cac1.pure.cloud";
-const GENESYS_DIVISION_ID = "c36e51ad-bec1-4117-9fd3-9c1d22147888";
 
 // ⚠️ SOLO DEMO
 const GENESYS_CLIENT_ID = "8510b821-97b8-4dab-a739-11260cfa2f1d";
@@ -35,33 +34,20 @@ async function getToken() {
     tokenExpiresAt = Date.now() + data.expires_in * 1000 - 60000;
 
     return cachedToken;
-    }
+}
 
-    export default async function handler(req, res) {
+export default async function handler(req, res) {
     try {
-        const { name, columnNames } = req.body;
-
-        if (!name) {
-        return res.status(400).json({ error: "name es obligatorio" });
-        }
-
         const token = await getToken();
 
-        const payload = {
-        name,
-        columnNames: columnNames || [
-            "request_id",
-            "contact_key",
-            "phone_number",
-            "status"
-        ],
-        phoneColumns: [
-            {
-            columnName: "phone_number",
-            type: "cell"
-            }
-        ]
-        };
+        // 🔴 NO QUEMAMOS NADA
+        const payload = req.body;
+
+        if (!payload?.name || !payload?.columnNames || !payload?.phoneColumns) {
+        return res.status(400).json({
+            error: "name, columnNames y phoneColumns son obligatorios"
+        });
+        }
 
         const response = await fetch(
         `${GENESYS_BASE_API}/api/v2/outbound/contactlists`,
@@ -76,8 +62,8 @@ async function getToken() {
         );
 
         if (!response.ok) {
-        const t = await response.text();
-        throw new Error(t);
+        const text = await response.text();
+        throw new Error(text);
         }
 
         const data = await response.json();
