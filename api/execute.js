@@ -35,7 +35,7 @@ export default async function handler(req, res) {
             contactlistid: b.contactListId ?? null,
             usenewlist: !!b.useNewList,
             newlistname: b.newListName ?? null,
-            campaignid: b.campaignId ?? null,
+            campaign_id: b.campaign_id ?? null,
             sfmc_payload: b
         };
 
