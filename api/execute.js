@@ -13,35 +13,45 @@ export default async function handler(req, res) {
     if (req.method !== "POST") return res.status(405).json({ error: "method_not_allowed" });
 
     try {
-        // ✅ OPCIÓN B: llega plano desde Postman/SFMC demo
+        // ✅ OPCIÓN B: body plano
         const b = req.body || {};
 
+        // Validación mínima
+        const missing = [];
+        if (!b.request_id) missing.push("request_id");
+        if (!b.contact_key) missing.push("contact_key");
+        if (!b.phone_number) missing.push("phone_number");
+        if (!b.contactListId) missing.push("contactListId");
+        if (!b.campaignId) missing.push("campaignId");
+        if (!b.status) missing.push("status");
+
+        if (missing.length) {
+            return res.status(400).json({ ok: false, error: "missing_fields", missing });
+        }
+
         const row = {
-            request_id: b.request_id ?? null,
-            contact_key: b.contact_key ?? null,
-            phone_number: b.phone_number ?? null,
+            request_id: b.request_id,
+            contact_key: b.contact_key,
+            phone_number: b.phone_number,
 
-            // ✅ NOMBRES EXACTOS COMO TU TABLA
-            contact_list_id: b.contactListId ?? null,
-            campaign_id: b.campaignId ?? null,
+            // ✅ Mapeo camelCase -> snake_case
+            contact_list_id: b.contactListId,
+            campaign_id: b.campaignId,
 
-            // ✅ tus estados simples (lo que acordaste)
-            status: b.status ?? "RECEIVED",
-
-            // opcional
+            status: b.status, // RECEIVED
             error_message: null
         };
 
-        const { error } = await supabase.from("vb_events").insert([row]);
+        const { data, error } = await supabase.from("vb_events").insert([row]).select("id").single();
         if (error) throw error;
 
-        return res.status(200).json({ ok: true });
+        return res.status(200).json({ ok: true, id: data?.id });
     } catch (err) {
         console.error("EXECUTE ERROR:", err);
         return res.status(500).json({
             ok: false,
             error: "execute_failed",
-            details: String(err?.message || err)
+            details: String(err?.message || err),
         });
     }
 }
