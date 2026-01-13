@@ -1,8 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 /** ===== Genesys (igual que tus otros servicios) ===== */
@@ -16,30 +16,30 @@ let cachedToken = null;
 let tokenExpiresAt = 0;
 
 async function getToken() {
-    if (cachedToken && Date.now() < tokenExpiresAt) return cachedToken;
+  if (cachedToken && Date.now() < tokenExpiresAt) return cachedToken;
 
-    if (!GENESYS_CLIENT_ID) throw new Error("Missing env GENESYS_CLIENT_ID");
-    if (!GENESYS_CLIENT_SECRET) throw new Error("Missing env GENESYS_CLIENT_SECRET");
+  if (!GENESYS_CLIENT_ID) throw new Error("Missing env GENESYS_CLIENT_ID");
+  if (!GENESYS_CLIENT_SECRET) throw new Error("Missing env GENESYS_CLIENT_SECRET");
 
-    const res = await fetch(`${GENESYS_LOGIN_URL}/oauth/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-            grant_type: "client_credentials",
-            client_id: GENESYS_CLIENT_ID,
-            client_secret: GENESYS_CLIENT_SECRET,
-        }),
-    });
+  const res = await fetch(`${GENESYS_LOGIN_URL}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: GENESYS_CLIENT_ID,
+      client_secret: GENESYS_CLIENT_SECRET,
+    }),
+  });
 
-    if (!res.ok) {
-        const t = await res.text().catch(() => "");
-        throw new Error(`Error obteniendo token Genesys: ${res.status} ${t}`);
-    }
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Error obteniendo token Genesys: ${res.status} ${t}`);
+  }
 
-    const data = await res.json();
-    cachedToken = data.access_token;
-    tokenExpiresAt = Date.now() + data.expires_in * 1000 - 60000; // 60s buffer
-    return cachedToken;
+  const data = await res.json();
+  cachedToken = data.access_token;
+  tokenExpiresAt = Date.now() + data.expires_in * 1000 - 60000; // 60s buffer
+  return cachedToken;
 }
 
 /** ===== Helpers ===== */
@@ -99,7 +99,19 @@ export default async function handler(req, res) {
       const [activity_id, contact_list_id] = key.split("||");
       const ids = rows.map((r) => r.id);
 
-      // 4.1 Claim: RECEIVED -> DISPATCHING
+      // Validación mínima para no hacer requests basura
+      if (!activity_id || !contact_list_id) {
+        results.push({
+          activity_id,
+          contact_list_id,
+          ok: false,
+          step: "validate_group",
+          error: "missing activity_id or contact_list_id",
+        });
+        continue;
+      }
+
+      // 4.1 Claim: RECEIVED -> DISPATCHING (evita doble corrida)
       const { data: claimed, error: claimErr } = await supabase
         .from("vb_events")
         .update({ status: "DISPATCHING", error_message: null })
@@ -108,23 +120,35 @@ export default async function handler(req, res) {
         .select("id, request_id, contact_key, phone_number, contact_list_id, activity_id");
 
       if (claimErr) {
-        results.push({ activity_id, contact_list_id, ok: false, step: "claim", error: String(claimErr.message || claimErr) });
+        results.push({
+          activity_id,
+          contact_list_id,
+          ok: false,
+          step: "claim",
+          error: String(claimErr?.message || claimErr),
+        });
         continue;
       }
 
       if (!claimed || claimed.length === 0) {
-        results.push({ activity_id, contact_list_id, ok: true, skipped: true, reason: "already_claimed" });
+        results.push({
+          activity_id,
+          contact_list_id,
+          ok: true,
+          skipped: true,
+          reason: "already_claimed",
+        });
         continue;
       }
 
-      // 4.2 Body para Genesys (status interno para Genesys siempre "NEW")
+      // 4.2 Body para Genesys (ESTO ES EL REQUEST REAL)
       const bodyAll = claimed.map((r) => ({
         contactListId: r.contact_list_id,
         data: {
           request_id: r.request_id,
           contact_key: r.contact_key,
           phone_number: r.phone_number,
-          status: "NEW",
+          status: "NEW", // status dentro de data para Genesys
         },
         callable: true,
       }));
@@ -139,15 +163,15 @@ export default async function handler(req, res) {
         const b = batches[i];
         const url = `${GENESYS_BASE_API}/api/v2/outbound/contactlists/${contact_list_id}/contacts`;
 
-        // ✅ LOG REQUEST (sin reventar logs)
-        console.log("GENESYS REQUEST", {
+        // ✅ LOG REQUEST (preview REAL: 2 contactos del array)
+        console.log("GENESYS REQUEST:", JSON.stringify({
           activity_id,
           contact_list_id,
           batch: `${i + 1}/${batches.length}`,
           url,
           contacts: b.length,
-          body_preview: b.length <= 5 ? b : `[${b.length} contacts]`,
-        });
+          body_preview: b.slice(0, 2), // 👈 REAL
+        }, null, 2));
 
         const startedAt = Date.now();
         const r = await fetch(url, {
@@ -156,20 +180,21 @@ export default async function handler(req, res) {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify(b),
+          body: JSON.stringify(b), // 👈 ESTE ES EL BODY REAL
         });
+
         const durationMs = Date.now() - startedAt;
         const txt = await r.text().catch(() => "");
 
         // ✅ LOG RESPONSE
-        console.log("GENESYS RESPONSE", {
+        console.log("GENESYS RESPONSE:", JSON.stringify({
           activity_id,
           contact_list_id,
           batch: `${i + 1}/${batches.length}`,
           status: r.status,
           duration_ms: durationMs,
-          response: txt?.slice(0, 1200),
-        });
+          response_preview: (txt || "").slice(0, 1200),
+        }, null, 2));
 
         if (!r.ok) {
           allOk = false;
@@ -203,12 +228,18 @@ export default async function handler(req, res) {
           contact_list_id,
           ok: false,
           failed: claimed.length,
-          error: lastError.slice(0, 600),
+          batches: batches.length,
+          error: lastError.slice(0, 900),
         });
       }
     }
 
-    return res.status(200).json({ ok: true, processedGroups: results.length, results });
+    return res.status(200).json({
+      ok: true,
+      total_received: received.length,
+      processedGroups: results.length,
+      results,
+    });
   } catch (err) {
     console.error("DISPATCH ERROR:", err);
     return res.status(500).json({
