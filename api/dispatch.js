@@ -1,11 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-/** ===== Genesys (igual que tus otros servicios) ===== */
+/** ===== Genesys ===== */
 const GENESYS_BASE_API = "https://api.cac1.pure.cloud";
 const GENESYS_LOGIN_URL = "https://login.cac1.pure.cloud";
 
@@ -46,7 +46,9 @@ async function getToken() {
 function groupByActivityAndList(rows) {
   const map = new Map();
   for (const r of rows) {
-    const k = `${r.activity_id}||${r.contact_list_id}`;
+    const activityId = r.activity_id ?? "";
+    const listId = r.contact_list_id ?? "";
+    const k = `${activityId}||${listId}`;
     if (!map.has(k)) map.set(k, []);
     map.get(k).push(r);
   }
@@ -59,6 +61,10 @@ function chunk(arr, size) {
   return out;
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -68,8 +74,12 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "method_not_allowed" });
 
   // Límites
-  const LIMIT = Number(process.env.DISPATCH_LIMIT || 500);            // filas totales por corrida
-  const BATCH_SIZE = Number(process.env.GENESYS_BATCH_SIZE || 1000);  // items por request a Genesys
+  const LIMIT = Number(process.env.DISPATCH_LIMIT || 500);           // filas totales por corrida
+  const BATCH_SIZE = Number(process.env.GENESYS_BATCH_SIZE || 1000); // items por request a Genesys
+
+  // DEMO: imprimir body completo a Genesys (true)
+  // PROD: ponlo en false o quítalo
+  const LOG_FULL_BODY = (process.env.LOG_FULL_BODY ?? "true") === "true";
 
   try {
     // 1) Traer RECEIVED
@@ -99,11 +109,11 @@ export default async function handler(req, res) {
       const [activity_id, contact_list_id] = key.split("||");
       const ids = rows.map((r) => r.id);
 
-      // Validación mínima para no hacer requests basura
+      // Validación mínima
       if (!activity_id || !contact_list_id) {
         results.push({
-          activity_id,
-          contact_list_id,
+          activity_id: activity_id || null,
+          contact_list_id: contact_list_id || null,
           ok: false,
           step: "validate_group",
           error: "missing activity_id or contact_list_id",
@@ -114,7 +124,7 @@ export default async function handler(req, res) {
       // 4.1 Claim: RECEIVED -> DISPATCHING (evita doble corrida)
       const { data: claimed, error: claimErr } = await supabase
         .from("vb_events")
-        .update({ status: "DISPATCHING", error_message: null })
+        .update({ status: "DISPATCHING", error_message: null, updated_at: nowIso() })
         .in("id", ids)
         .eq("status", "RECEIVED")
         .select("id, request_id, contact_key, phone_number, contact_list_id, activity_id");
@@ -141,7 +151,7 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // 4.2 Body para Genesys (ESTO ES EL REQUEST REAL)
+      // 4.2 Body para Genesys (REQUEST REAL)
       const bodyAll = claimed.map((r) => ({
         contactListId: r.contact_list_id,
         data: {
@@ -163,15 +173,41 @@ export default async function handler(req, res) {
         const b = batches[i];
         const url = `${GENESYS_BASE_API}/api/v2/outbound/contactlists/${contact_list_id}/contacts`;
 
-        // ✅ LOG REQUEST (preview REAL: 2 contactos del array)
-        console.log("GENESYS REQUEST:", JSON.stringify({
-          activity_id,
-          contact_list_id,
-          batch: `${i + 1}/${batches.length}`,
-          url,
-          contacts: b.length,
-          body_preview: b.slice(0, 2), // 👈 REAL
-        }, null, 2));
+        // ✅ LOG REQUEST (FULL para DEMO)
+        if (LOG_FULL_BODY) {
+          console.log(
+            "GENESYS REQUEST FULL:",
+            JSON.stringify(
+              {
+                activity_id,
+                contact_list_id,
+                batch: `${i + 1}/${batches.length}`,
+                url,
+                contacts: b.length,
+                body: b, // 👈 TODO el request real
+              },
+              null,
+              2
+            )
+          );
+        } else {
+          // fallback (si lo desactivas)
+          console.log(
+            "GENESYS REQUEST:",
+            JSON.stringify(
+              {
+                activity_id,
+                contact_list_id,
+                batch: `${i + 1}/${batches.length}`,
+                url,
+                contacts: b.length,
+                body_preview: b.slice(0, 2),
+              },
+              null,
+              2
+            )
+          );
+        }
 
         const startedAt = Date.now();
         const r = await fetch(url, {
@@ -186,15 +222,22 @@ export default async function handler(req, res) {
         const durationMs = Date.now() - startedAt;
         const txt = await r.text().catch(() => "");
 
-        // ✅ LOG RESPONSE
-        console.log("GENESYS RESPONSE:", JSON.stringify({
-          activity_id,
-          contact_list_id,
-          batch: `${i + 1}/${batches.length}`,
-          status: r.status,
-          duration_ms: durationMs,
-          response_preview: (txt || "").slice(0, 1200),
-        }, null, 2));
+        // ✅ LOG RESPONSE (completa)
+        console.log(
+          "GENESYS RESPONSE:",
+          JSON.stringify(
+            {
+              activity_id,
+              contact_list_id,
+              batch: `${i + 1}/${batches.length}`,
+              status: r.status,
+              duration_ms: durationMs,
+              response: txt, // 👈 completa (demo)
+            },
+            null,
+            2
+          )
+        );
 
         if (!r.ok) {
           allOk = false;
@@ -207,7 +250,7 @@ export default async function handler(req, res) {
       if (allOk) {
         await supabase
           .from("vb_events")
-          .update({ status: "DISPATCHED", error_message: null })
+          .update({ status: "DISPATCHED", error_message: null, updated_at: nowIso() })
           .in("id", claimed.map((x) => x.id));
 
         results.push({
@@ -220,7 +263,7 @@ export default async function handler(req, res) {
       } else {
         await supabase
           .from("vb_events")
-          .update({ status: "FAILED", error_message: lastError })
+          .update({ status: "FAILED", error_message: lastError, updated_at: nowIso() })
           .in("id", claimed.map((x) => x.id));
 
         results.push({
@@ -229,7 +272,7 @@ export default async function handler(req, res) {
           ok: false,
           failed: claimed.length,
           batches: batches.length,
-          error: lastError.slice(0, 900),
+          error: lastError.slice(0, 1200),
         });
       }
     }
